@@ -1,0 +1,59 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: dark;
+  --bg-0: #07070a;
+  --bg-1: #0b0c12;
+  --bg-2: #14162a;
+  --accent: #41f2d0;
+  --accent-2: #ea8b4c;
+  --text-strong: #f0f7ff;
+  --text-muted: #9aa3c2;
+}
+
+* {
+  scrollbar-color: rgba(65, 242, 208, 0.35) rgba(10, 12, 18, 0.6);
+  scrollbar-width: thin;
+}
+
+body {
+  min-height: 100vh;
+  background: radial-gradient(circle at top right, rgba(65, 242, 208, 0.12), transparent 42%),
+    radial-gradient(circle at 20% 20%, rgba(234, 139, 76, 0.14), transparent 40%),
+    linear-gradient(120deg, var(--bg-0), var(--bg-2));
+  color: var(--text-strong);
+  font-family: var(--font-space), system-ui, -apple-system, sans-serif;
+}
+
+a {
+  color: inherit;
+  text-decoration: none;
+}
+
+.app-shell {
+  position: relative;
+  overflow: visible;
+}
+
+.app-shell::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background-image: url("data:image/svg+xml,%3Csvg width='120' height='120' viewBox='0 0 120 120' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.8' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='120' height='120' filter='url(%23n)' opacity='0.12'/%3E%3C/svg%3E");
+  opacity: 0.25;
+  pointer-events: none;
+  mix-blend-mode: screen;
+}
+
+input,
+textarea {
+  font-family: var(--font-space), system-ui, -apple-system, sans-serif;
+}
+
+code,
+.mono {
+  font-family: var(--font-mono), ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono",
+    "Courier New", monospace;
+}
