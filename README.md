@@ -19,11 +19,16 @@ A dark-mode, single-page Next.js app that runs a multi-step AI pipeline to unpac
    ```bash
    npm install
    ```
-2. Run the app:
+2. Optional: add your API key to `.env.local` so you do not have to enter it in the UI:
+   ```bash
+   cp .env.example .env.local
+   ```
+   Then set `OPENAI_API_KEY` in `.env.local`.
+3. Run the app:
    ```bash
    npm run dev
    ```
-3. Open http://localhost:3000
+4. Open http://localhost:3000
 
 You can also use the Makefile:
 ```bash
@@ -33,12 +38,14 @@ make dev
 
 ## Usage
 1. Enter your problem description.
-2. Paste your OpenAI API key (starts with `sk-`).
-3. Optionally enable “Remember API key” (stored in localStorage only).
+2. Provide an OpenAI API key in one of two ways:
+   - Set `OPENAI_API_KEY` in `.env.local` (preferred for local development), or
+   - Paste a key in the UI field.
+3. Optionally enable “Remember API key” to store the UI key in localStorage.
 4. Click **Start Deep Dive** to run the pipeline.
 
-### Model Override
-The model field defaults to `gpt-5`. Advanced users can enter a different model ID (e.g., `gpt-4.1` or similar) if their account supports it.
+### Model Selection
+The model picker is a dropdown populated from your account-accessible OpenAI models (filtered to text models suitable for this pipeline). If model lookup fails, the app falls back to a safe default list.
 
 ## Pipeline Steps
 1. Distill: clarify and restate the core problem.
@@ -70,6 +77,7 @@ To reset everything, clear your browser’s local storage for this site.
 
 ## Troubleshooting
 - **API errors**: ensure your API key is valid and has access to the model you entered.
+- **Missing API key**: add `OPENAI_API_KEY` to `.env.local` or enter a key in the UI.
 - **Empty output**: the app falls back to raw text if JSON parsing fails.
 - **CORS or network issues**: the request is routed through the Next.js API route, so make sure the server is running.
 
@@ -80,9 +88,11 @@ Use the **Export Markdown** button in the results header or the session history 
 Use the **Export JSON** button in the results header or the session history list. The download includes the full session object, step metadata, and outputs.
 
 ## Security Notes
-Your API key is stored only in your browser when “Remember API key” is enabled. It is sent to the server route on each call in order to reach the OpenAI API.
+If you set `OPENAI_API_KEY` in `.env.local`, it stays server-side and is never exposed to the browser.
+If you paste a key into the UI, it is stored only in your browser when “Remember API key” is enabled, and sent to the server route for API calls.
 
 ## Development Notes
 - App Router is used (`app/` directory).
 - Tailwind CSS handles styling and animations.
 - Responses API calls live in `app/api/run-step/route.ts`.
+- Model discovery lives in `app/api/models/route.ts`.

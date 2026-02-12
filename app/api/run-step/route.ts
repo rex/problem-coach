@@ -6,6 +6,7 @@ import {
   buildStepPrompt,
   normalizeStepOutput
 } from "@/lib/pipeline";
+import { DEFAULT_MODEL } from "@/lib/models";
 import { PipelineContext, StepId, StepOutput } from "@/lib/types";
 
 const SYSTEM_PROMPT =
@@ -14,16 +15,19 @@ const SYSTEM_PROMPT =
 
 function extractOutputText(response: unknown): string {
   if (typeof response !== "object" || response === null) return "";
-  const maybeAny = response as Record<string, any>;
-  if (typeof maybeAny.output_text === "string") {
-    return maybeAny.output_text;
+  const maybeResponse = response as Record<string, unknown>;
+  if (typeof maybeResponse.output_text === "string") {
+    return maybeResponse.output_text;
   }
-  const output = Array.isArray(maybeAny.output) ? maybeAny.output : [];
+  const output = Array.isArray(maybeResponse.output) ? maybeResponse.output : [];
   const chunks: string[] = [];
   for (const item of output) {
-    const content = Array.isArray(item.content) ? item.content : [];
+    if (typeof item !== "object" || item === null) continue;
+    const contentValue = (item as Record<string, unknown>).content;
+    const content = Array.isArray(contentValue) ? contentValue : [];
     for (const block of content) {
-      const text = block?.text;
+      if (typeof block !== "object" || block === null) continue;
+      const text = (block as Record<string, unknown>).text;
       if (typeof text === "string") {
         chunks.push(text);
       }
@@ -47,19 +51,33 @@ function parseStepOutput(text: string, fallbackTitle: string): StepOutput {
 export async function POST(req: Request) {
   try {
     const body = await req.json();
-    const apiKey = body?.apiKey as string | undefined;
-    const model = (body?.model as string | undefined) ?? "gpt-5";
+    const bodyApiKey = typeof body?.apiKey === "string" ? body.apiKey.trim() : "";
+    const envApiKey = process.env.OPENAI_API_KEY?.trim() ?? "";
+    const apiKey = bodyApiKey || envApiKey;
+    const model = (body?.model as string | undefined) ?? DEFAULT_MODEL;
     const stepId = body?.stepId as StepId | undefined;
     const problem = body?.problem as string | undefined;
     const context = (body?.context as PipelineContext | undefined) ?? {};
 
-    if (!apiKey || !problem || !stepId) {
+    if (!problem || !stepId) {
       return NextResponse.json(
         {
           stepId: stepId ?? "unknown",
           ok: false,
           output: null,
-          error: "Missing required fields: apiKey, problem, or stepId."
+          error: "Missing required fields: problem or stepId."
+        },
+        { status: 400 }
+      );
+    }
+
+    if (!apiKey) {
+      return NextResponse.json(
+        {
+          stepId,
+          ok: false,
+          output: null,
+          error: "Missing API key. Provide one in the UI or set OPENAI_API_KEY in .env.local."
         },
         { status: 400 }
       );
@@ -92,6 +110,7 @@ export async function POST(req: Request) {
       text: {
         format: {
           type: "json_schema",
+          name: "problem_coach_step_output",
           strict: true,
           schema: STEP_OUTPUT_SCHEMA
         }

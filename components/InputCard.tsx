@@ -5,6 +5,10 @@ type InputCardProps = {
   apiKey: string;
   rememberKey: boolean;
   model: string;
+  modelOptions: string[];
+  modelsLoading: boolean;
+  modelError: string | null;
+  serverKeyAvailable: boolean;
   running: boolean;
   onProblemChange: (value: string) => void;
   onApiKeyChange: (value: string) => void;
@@ -19,6 +23,10 @@ export function InputCard({
   apiKey,
   rememberKey,
   model,
+  modelOptions,
+  modelsLoading,
+  modelError,
+  serverKeyAvailable,
   running,
   onProblemChange,
   onApiKeyChange,
@@ -27,6 +35,8 @@ export function InputCard({
   onRun,
   onReset
 }: InputCardProps) {
+  const availableModels = modelOptions.includes(model) ? modelOptions : [model, ...modelOptions];
+
   return (
     <div className="relative rounded-3xl border border-white/10 bg-ink-900/70 p-8 shadow-soft">
       <div className="absolute inset-0 rounded-3xl bg-gradient-to-br from-white/5 via-transparent to-transparent" />
@@ -48,28 +58,44 @@ export function InputCard({
 
         <div className="grid gap-4 md:grid-cols-2">
           <label className="space-y-2 text-sm text-slate-300">
-            <span>OpenAI API key</span>
+            <span>
+              OpenAI API key
+              {serverKeyAvailable ? " (optional)" : ""}
+            </span>
             <input
               type="password"
               value={apiKey}
               onChange={(event: ChangeEvent<HTMLInputElement>) => onApiKeyChange(event.target.value)}
-              placeholder="sk-..."
+              placeholder={serverKeyAvailable ? "Optional when using .env key" : "sk-..."}
               className="w-full rounded-xl border border-white/10 bg-ink-950/80 px-3 py-2 text-sm text-white focus:border-emerald-300/60 focus:outline-none focus:ring-2 focus:ring-emerald-300/20"
             />
             <p className="text-xs text-slate-500">
-              Stored locally only if you enable remember.
+              {serverKeyAvailable
+                ? "Server key detected from OPENAI_API_KEY. You can still override it here."
+                : "Stored locally only if you enable remember."}
             </p>
           </label>
 
           <label className="space-y-2 text-sm text-slate-300">
             <span>Model</span>
-            <input
+            <select
               value={model}
-              onChange={(event: ChangeEvent<HTMLInputElement>) => onModelChange(event.target.value)}
-              placeholder="gpt-5"
+              onChange={(event: ChangeEvent<HTMLSelectElement>) => onModelChange(event.target.value)}
               className="w-full rounded-xl border border-white/10 bg-ink-950/80 px-3 py-2 text-sm text-white focus:border-emerald-300/60 focus:outline-none focus:ring-2 focus:ring-emerald-300/20"
-            />
-            <p className="text-xs text-slate-500">Advanced: override the default model.</p>
+            >
+              {availableModels.map((modelId) => (
+                <option key={modelId} value={modelId}>
+                  {modelId}
+                </option>
+              ))}
+            </select>
+            <p className="text-xs text-slate-500">
+              {modelsLoading
+                ? "Loading available models..."
+                : modelError
+                  ? "Could not refresh model list. Showing defaults."
+                  : "Models are loaded from your OpenAI account access."}
+            </p>
           </label>
         </div>
 

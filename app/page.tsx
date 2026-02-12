@@ -7,6 +7,7 @@ import { ResultCard } from "@/components/ResultCard";
 import { SessionHistory } from "@/components/SessionHistory";
 import { buildContextFromSession, createEmptySteps, STEP_META, STEP_ORDER } from "@/lib/pipeline";
 import { downloadJson, downloadMarkdown, stepToMarkdown } from "@/lib/export";
+import { DEFAULT_MODEL, FALLBACK_MODEL_OPTIONS, normalizeModelList } from "@/lib/models";
 import {
   clearApiKey,
   deleteSession,
@@ -18,7 +19,40 @@ import {
 } from "@/lib/storage";
 import { Session, StepId, StepState } from "@/lib/types";
 
-const DEFAULT_MODEL = "gpt-5";
+const MODEL_REFRESH_DEBOUNCE_MS = 350;
+const STEP_REQUEST_TIMEOUT_MS = 90000;
+const STEP_REQUEST_MAX_RETRIES = 1;
+const STEP_REQUEST_RETRY_DELAY_MS = 700;
+
+type JsonRecord = Record<string, unknown>;
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => window.setTimeout(resolve, ms));
+}
+
+function parseJsonRecord(raw: string): JsonRecord | null {
+  if (!raw.trim()) return null;
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    return typeof parsed === "object" && parsed !== null ? (parsed as JsonRecord) : null;
+  } catch {
+    return null;
+  }
+}
+
+function normalizeNetworkError(error: unknown, stepId: StepId): string {
+  if (typeof navigator !== "undefined" && navigator.onLine === false) {
+    return "Your browser appears offline. Reconnect and retry.";
+  }
+
+  if (error instanceof DOMException && error.name === "AbortError") {
+    return `Request timed out after ${Math.round(STEP_REQUEST_TIMEOUT_MS / 1000)}s while running ${STEP_META[stepId].title}.`;
+  }
+
+  const message =
+    error instanceof Error ? error.message : "Network request failed while calling the API route.";
+  return `${message} Check that the app server is still running and reachable.`;
+}
 
 function createSession(problem: string, model: string): Session {
   return {
@@ -87,6 +121,10 @@ export default function HomePage() {
   const [apiKey, setApiKey] = useState("");
   const [rememberKey, setRememberKey] = useState(false);
   const [model, setModel] = useState(DEFAULT_MODEL);
+  const [modelOptions, setModelOptions] = useState<string[]>(FALLBACK_MODEL_OPTIONS);
+  const [modelsLoading, setModelsLoading] = useState(false);
+  const [modelError, setModelError] = useState<string | null>(null);
+  const [serverKeyAvailable, setServerKeyAvailable] = useState(false);
   const [session, setSession] = useState<Session | null>(null);
   const [sessions, setSessions] = useState<Session[]>([]);
   const [running, setRunning] = useState(false);
@@ -116,7 +154,7 @@ export default function HomePage() {
   }, []);
 
   useEffect(() => {
-    if (!session) return;
+    if (!session?.id) return;
     setCollapsedSteps(
       STEP_ORDER.reduce((acc, stepId) => {
         acc[stepId] = false;
@@ -127,12 +165,63 @@ export default function HomePage() {
 
   useEffect(() => {
     if (!hydrated) return;
-    if (!rememberKey) {
+    if (!rememberKey || !apiKey.trim()) {
       clearApiKey();
-    } else if (apiKey) {
-      saveApiKey(apiKey);
+    } else {
+      saveApiKey(apiKey.trim());
     }
-  }, [rememberKey, apiKey]);
+  }, [hydrated, rememberKey, apiKey]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const controller = new AbortController();
+
+    const loadModels = async () => {
+      setModelsLoading(true);
+      setModelError(null);
+      try {
+        const response = await fetch("/api/models", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ apiKey: apiKey.trim() }),
+          signal: controller.signal
+        });
+        const raw = await response.text();
+        const data = parseJsonRecord(raw);
+        if (cancelled) return;
+
+        const nextOptions = normalizeModelList(
+          Array.isArray(data?.models)
+            ? data.models.filter((value): value is string => typeof value === "string")
+            : []
+        );
+
+        setModelOptions(nextOptions.length > 0 ? nextOptions : FALLBACK_MODEL_OPTIONS);
+        setServerKeyAvailable(Boolean(data?.usingServerKey));
+
+        if (!response.ok || data?.ok !== true) {
+          setModelError(typeof data?.error === "string" ? data.error : "Could not refresh model list.");
+        }
+      } catch (err) {
+        if (cancelled || controller.signal.aborted) return;
+        const message = err instanceof Error ? err.message : "Could not refresh model list.";
+        setModelOptions(FALLBACK_MODEL_OPTIONS);
+        setServerKeyAvailable(false);
+        setModelError(message);
+      } finally {
+        if (!cancelled) {
+          setModelsLoading(false);
+        }
+      }
+    };
+
+    const timeoutId = window.setTimeout(loadModels, apiKey.trim() ? MODEL_REFRESH_DEBOUNCE_MS : 0);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timeoutId);
+      controller.abort();
+    };
+  }, [apiKey]);
 
   const runningStep = useMemo(() => {
     if (!session) return null;
@@ -153,6 +242,55 @@ export default function HomePage() {
     setSessions(nextSessions);
   };
 
+  const requestStep = async (
+    stepId: StepId,
+    payload: {
+      apiKey: string;
+      model: string;
+      stepId: StepId;
+      problem: string;
+      context: ReturnType<typeof buildContextFromSession>;
+    }
+  ): Promise<{ ok: true; output: StepState["output"] } | { ok: false; error: string }> => {
+    for (let attempt = 0; attempt <= STEP_REQUEST_MAX_RETRIES; attempt += 1) {
+      const controller = new AbortController();
+      const timeoutId = window.setTimeout(() => controller.abort(), STEP_REQUEST_TIMEOUT_MS);
+
+      try {
+        const response = await fetch("/api/run-step", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+          signal: controller.signal
+        });
+
+        const raw = await response.text();
+        const data = parseJsonRecord(raw);
+        if (!response.ok || data?.ok !== true) {
+          const message =
+            typeof data?.error === "string"
+              ? data.error
+              : raw.trim()
+                ? `Step failed (${response.status}): ${raw.slice(0, 220)}`
+                : `Step failed (${response.status} ${response.statusText}).`;
+          return { ok: false, error: message };
+        }
+
+        return { ok: true, output: data.output as StepState["output"] };
+      } catch (error) {
+        if (attempt < STEP_REQUEST_MAX_RETRIES) {
+          await delay(STEP_REQUEST_RETRY_DELAY_MS);
+          continue;
+        }
+        return { ok: false, error: normalizeNetworkError(error, stepId) };
+      } finally {
+        window.clearTimeout(timeoutId);
+      }
+    }
+
+    return { ok: false, error: "Step request did not complete." };
+  };
+
   const runPipeline = async (baseSession: Session, startIndex: number) => {
     let current = resetStepsFrom(baseSession, startIndex);
     persistSession(current);
@@ -166,21 +304,16 @@ export default function HomePage() {
 
       try {
         const context = buildContextFromSession(current, stepId);
-        const response = await fetch("/api/run-step", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            apiKey: apiKey.trim(),
-            model: model.trim() || DEFAULT_MODEL,
-            stepId,
-            problem: current.problem,
-            context
-          })
+        const result = await requestStep(stepId, {
+          apiKey: apiKey.trim(),
+          model: current.model,
+          stepId,
+          problem: current.problem,
+          context
         });
 
-        const data = await response.json();
-        if (!response.ok || !data?.ok) {
-          const message = data?.error ?? "Step failed to complete.";
+        if (!result.ok) {
+          const message = result.error || "Step failed to complete.";
           current = setStepFinish(current, stepId, { status: "error", error: message });
           persistSession(current);
           setError(message);
@@ -188,7 +321,7 @@ export default function HomePage() {
           return;
         }
 
-        current = setStepFinish(current, stepId, { status: "success", output: data.output });
+        current = setStepFinish(current, stepId, { status: "success", output: result.output });
         persistSession(current);
       } catch (err) {
         const message = err instanceof Error ? err.message : "Network error while calling the API.";
@@ -209,11 +342,12 @@ export default function HomePage() {
       setError("Please describe the problem you want to work on.");
       return;
     }
-    if (!apiKey.trim()) {
-      setError("Please provide a valid OpenAI API key.");
+    if (!apiKey.trim() && !serverKeyAvailable && !modelsLoading && !modelError) {
+      setError("Provide an OpenAI API key or set OPENAI_API_KEY in .env.local.");
       return;
     }
-    const freshSession = createSession(problem.trim(), model.trim() || DEFAULT_MODEL);
+    const selectedModel = model.trim() || DEFAULT_MODEL;
+    const freshSession = createSession(problem.trim(), selectedModel);
     persistSession(freshSession);
     await runPipeline(freshSession, 0);
   };
@@ -327,6 +461,10 @@ export default function HomePage() {
             apiKey={apiKey}
             rememberKey={rememberKey}
             model={model}
+            modelOptions={modelOptions}
+            modelsLoading={modelsLoading}
+            modelError={modelError}
+            serverKeyAvailable={serverKeyAvailable}
             running={running}
             onProblemChange={setProblem}
             onApiKeyChange={setApiKey}
